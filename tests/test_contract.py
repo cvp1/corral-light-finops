@@ -166,6 +166,40 @@ class Portability(unittest.TestCase):
                     with open(p, encoding="utf-8") as f:
                         ast.parse(f.read(), p, feature_version=(3, 9))
 
+    def test_no_fstring_needs_python_3_12(self):
+        """Python 3.12 relaxed f-strings: a quote matching the outer one, or a
+        backslash, inside a replacement field fails on 3.9. The 3.9 grammar
+        flag above does not catch these, so the tokens are checked here."""
+        import io
+        import tokenize
+        if not hasattr(tokenize, "FSTRING_START"):
+            self.skipTest("this Python parses f-strings the old way; it would fail on import")
+        bad = []
+        for dirpath, _dirs, files in os.walk(ROOT):
+            if ".git" in dirpath:
+                continue
+            for fn in files:
+                if not fn.endswith(".py"):
+                    continue
+                p = os.path.join(dirpath, fn)
+                with open(p, encoding="utf-8") as f:
+                    toks = list(tokenize.generate_tokens(io.StringIO(f.read()).readline))
+                stack = []
+                for t in toks:
+                    if t.type == tokenize.FSTRING_START:
+                        if stack:
+                            q = t.string.lstrip("rRbBfF")[:1]
+                            if q in stack:
+                                bad.append(f"{fn}:{t.start[0]} nested quote")
+                        stack.append(t.string.lstrip("rRbBfF")[:1])
+                    elif t.type == tokenize.FSTRING_END:
+                        stack.pop()
+                    elif stack and t.type == tokenize.STRING:
+                        q = t.string.lstrip("rRbBuUfF")[:1]
+                        if q in stack or "\\" in t.string:
+                            bad.append(f"{fn}:{t.start[0]} quote or backslash in a field")
+        self.assertEqual(bad, [])
+
     def test_no_file_python_would_run_on_its_own(self):
         for dirpath, _dirs, files in os.walk(ROOT):
             if ".git" in dirpath:
