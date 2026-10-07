@@ -1,0 +1,47 @@
+# Known subscription plans and their list prices, offered as hints only.
+# A catalogue price is never written as the operator's: it shows as
+# "list price as of <date>, not confirmed" until the operator types an
+# amount in `corral-light finops setup`.
+#
+# Matching: `vendor` and the plan the vendor states (`vendor_plan`); when
+# `tier` is given, the vendor's tier must contain it. A plan the vendor
+# does not state, or states in a way no row matches, gets no price at all.
+# Plans whose price could not be confirmed are left out on purpose.
+
+[[plan]]
+id = "claude-pro"
+vendor = "claude"
+vendor_plan = "pro"
+title = "Claude Pro"
+usd_cents_month = 2000
+as_of = "2026-10-07"
+source = "https://claude.com/pricing"
+
+[[plan]]
+id = "claude-max-5x"
+vendor = "claude"
+vendor_plan = "max"
+tier = "max_5x"
+title = "Claude Max 5x"
+usd_cents_month = 10000
+as_of = "2026-10-07"
+source = "https://claude.com/pricing"
+
+[[plan]]
+id = "claude-max-20x"
+vendor = "claude"
+vendor_plan = "max"
+tier = "max_20x"
+title = "Claude Max 20x"
+usd_cents_month = 20000
+as_of = "2026-10-07"
+source = "https://claude.com/pricing"
+
+[[plan]]
+id = "chatgpt-plus"
+vendor = "codex"
+vendor_plan = "plus"
+title = "ChatGPT Plus"
+usd_cents_month = 2000
+as_of = "2026-10-07"
+source = "https://chatgpt.com/pricing"
