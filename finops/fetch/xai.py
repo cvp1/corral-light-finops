@@ -9,8 +9,8 @@ from finops.fetch.common import Days, dec, day_of, result
 BASE = "https://management-api.x.ai"
 
 
-def fetch(client, key, start, end, params=None):
-    h = {"Authorization": f"Bearer {key}"}
+def fetch(client, start, end, params=None):
+    h = {}                       # Light's fetch proxy adds the credential
     v = client.json("GET", f"{BASE}/auth/management-keys/validation", h)
     if not isinstance(v, dict):
         raise ValueError("the key validation response is not an object")

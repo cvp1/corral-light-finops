@@ -18,3 +18,25 @@ jobs:
         env:
           PYTHONDONTWRITEBYTECODE: "1"
         run: python -m unittest discover -v
+
+  # macOS: the Mac's own Python (3.9 from the Command Line Tools) and a
+  # current one.
+  macos:
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["system", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - if: matrix.python != 'system'
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: unit tests
+        working-directory: tests
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          if [ "${{ matrix.python }}" = system ]; then PY=/usr/bin/python3; else PY=python3; fi
+          "$PY" -m unittest discover -v

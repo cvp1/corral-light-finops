@@ -1,5 +1,5 @@
-"""Billing fetchers (Light plan §6.7): one vendor per run, one key, the
-vendor's exact hosts only. `run()` returns the result document, or raises
+"""Billing fetchers (Light plan §6.7): one vendor per run, the vendor's
+exact hosts only, through Light's fetch proxy, which holds the key. `run()` returns the result document, or raises
 with a message that carries no key."""
 import os
 import time
@@ -21,11 +21,9 @@ def run(environ=None, now=None, client=None):
     mod = VENDORS.get(vendor)
     if mod is None:
         raise FetchError(f"unknown vendor {vendor!r}")
-    with open(e["CORRAL_FETCH_KEY"], encoding="utf-8") as f:
-        key = f.read().strip()
     hosts = [h for h in e.get("CORRAL_FETCH_HOSTS", "").split(",") if h]
-    client = client or Client(hosts)
+    client = client or Client(hosts, e.get("CORRAL_FETCH_API"))
     start, end = common.window(time.time() if now is None else now)
-    doc = mod.fetch(client, key, start, end, params_from(e))
+    doc = mod.fetch(client, start, end, params_from(e))
     doc["requests"] = client.calls
     return doc

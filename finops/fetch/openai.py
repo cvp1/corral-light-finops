@@ -13,8 +13,8 @@ def _ts(d):
     return calendar.timegm(d.timetuple())
 
 
-def fetch(client, key, start, end, params=None):
-    h = {"Authorization": f"Bearer {key}"}
+def fetch(client, start, end, params=None):
+    h = {}                       # Light's fetch proxy adds the credential
     days = Days()
     q = {"start_time": str(_ts(start)), "end_time": str(_ts(end)), "bucket_width": "1d",
          "limit": "31"}

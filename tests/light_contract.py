@@ -1,11 +1,12 @@
 """Corral Light's module contract, vendored for this module's tests.
 
 Copied verbatim (whole top-level definitions) from Light's
-modules.py at commit 1409240efa64a94edcd9eb4363fa43729afc0966 (branch finops-phase4,
+modules.py at commit c9db37eda33c191cd9d7097b6104d51c9c7b3bf0 (branch master,
 2026-10-08): the manifest checks (validate_manifest, with the fetcher
 entry), and the snapshot validator (validate_snapshot) with the rail
 notice checks. Re-vendor when Light's core_api or contract changes.
 """
+
 import json
 import math
 import re
@@ -41,7 +42,8 @@ FETCH_VENDORS = {
     "anthropic": ("api.anthropic.com",),
     "openai": ("api.openai.com",),
     "xai": ("management-api.x.ai",),
-    "gcp": ("oauth2.googleapis.com", "bigquery.googleapis.com"),
+    # Google's token host is the core's own (fetch_proxy), never the module's.
+    "gcp": ("bigquery.googleapis.com",),
 }
 
 FETCH_EVERY_S = (21600, 3600, 7 * 86400)      # default, least, most

@@ -50,10 +50,12 @@ API, so this is for pay-per-call accounts only:
 | xAI | a Management key scoped to one team | billing permissions are not documented |
 | Google Cloud | a service account JSON key reading your Cloud Billing export in BigQuery | yes: `roles/bigquery.jobUser` and `roles/bigquery.dataViewer` |
 
-Keys never reach FinOps's config. Light stores them (mode 0600), and you
-grant one key to FinOps for one vendor. Each fetch runs in Light's sandbox
-and can reach only that vendor's own hosts. Light refuses any result that
-contains the key, and keeps it out of every error message.
+Keys never reach FinOps at all. Light stores them (mode 0600), and you
+grant one key to FinOps for one vendor. FinOps's fetcher runs in Light's
+sandbox with no key: it sends its requests to Light's fetch proxy, which
+allows only that vendor's own hosts, adds the key itself (for Google, signs
+for a short-lived token itself), makes the HTTPS call and passes back the
+answer. Light refuses any answer that contains the key.
 
 ```
 corral-light finops billing                        # where to create each key, step by step
@@ -67,8 +69,8 @@ Units, as each vendor documents them: Anthropic reports cents, which
 FinOps turns into dollars. OpenAI's and xAI's figures are read as whole
 dollars, as in their examples, since their references don't say. Google's
 figure is cost net of credits, in your billing account's currency, by UTC
-day. Billing APIs need a Light with module fetchers; older Lights refuse
-this manifest, so update Light first.
+day. Billing APIs need a Light with the fetch proxy (October 2026 or later);
+update Light first.
 
 ### Notices in Light's rail
 

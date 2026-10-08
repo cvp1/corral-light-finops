@@ -1,7 +1,8 @@
-"""FinOps fetcher: one vendor billing API, one granted key, one result.
+"""FinOps fetcher: one vendor billing API, one grant, one result.
 
-Run by Light as `python -I -B fetcher.py` in its fetch sandbox, behind a
-proxy that allows the grant's vendor hosts only. The result is one JSON
+Run by Light as `python -I -B fetcher.py` in its fetch sandbox. It holds no
+key: its only way out is Light's fetch proxy, which allows the grant's
+vendor hosts only and adds the credential itself. The result is one JSON
 document on stdout; any failure exits non-zero with one short line and
 nothing is stored, so a partial fetch never replaces a complete one.
 """

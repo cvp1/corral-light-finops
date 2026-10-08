@@ -9,8 +9,9 @@ VERSION = "2023-06-01"
 CENTS = 100
 
 
-def fetch(client, key, start, end, params=None):
-    h = {"x-api-key": key, "anthropic-version": VERSION}
+def fetch(client, start, end, params=None):
+    # No credential here: Light's fetch proxy adds the key (plan §6.7.2).
+    h = {"anthropic-version": VERSION}
     org = {}
     try:
         me = client.json("GET", f"{BASE}/v1/organizations/me", h)

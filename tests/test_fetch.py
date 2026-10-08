@@ -1,14 +1,14 @@
-"""Billing fetchers against a local stub (plan §8.2 "Fetchers"): success,
-pagination to the end, partial failures that store nothing, 401, 429,
-timeouts, and the GCP token's RSA signature."""
-import base64
-import hashlib
+"""Billing fetchers against a local stub of Light's fetch proxy (plan §8.2
+"Fetchers"): success, pagination to the end, partial failures that store
+nothing, 401, 429, timeouts. FinOps holds no key (Light plan §6.7.2): the
+stub checks that no request carries a credential, and plays the proxy,
+which in Light adds it."""
 import json
 import os
 import shutil
-import subprocess
 import tempfile
 import threading
+import time
 import unittest
 from datetime import date
 from decimal import Decimal
@@ -16,16 +16,17 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
 import helpers  # noqa: F401  (sys.path)
-from finops.fetch import anthropic, gcp, openai, rsa, xai
+from finops.fetch import anthropic, gcp, openai, xai
 from finops.fetch.http import Client, FetchError
 
-KEY = "sk-test-FIXTURE-0123456789abcdefghijklmnop"
 START, END = date(2026, 9, 1), date(2026, 10, 9)
+CREDENTIAL_HEADERS = ("authorization", "x-api-key", "proxy-authorization", "cookie")
 
 
 class Stub:
-    """A local HTTP server; `routes(method, path, query, headers, body)`
-    returns (status, json, headers) or raises to drop the connection."""
+    """Light's fetch proxy, played by a local server: requests arrive in
+    proxy form (an absolute https URL). `routes(method, host, path, query,
+    headers, body)` returns (status, json or raw text, headers)."""
 
     def __init__(self, routes):
         stub = self
@@ -39,12 +40,14 @@ class Stub:
                 u = urlsplit(self.path)
                 n = int(self.headers.get("content-length") or 0)
                 body = self.rfile.read(n) if n else b""
-                stub.seen.append((method, u.path, parse_qs(u.query), dict(self.headers), body))
-                status, doc, hdrs = routes(method, u.path, parse_qs(u.query),
-                                           self.headers, body)
+                hdrs = {k.lower(): v for k, v in self.headers.items()}
+                stub.seen.append((method, u.scheme, u.hostname, u.path, parse_qs(u.query), hdrs,
+                                  body))
+                status, doc, extra = routes(method, u.hostname, u.path, parse_qs(u.query),
+                                            hdrs, body)
                 raw = doc.encode() if isinstance(doc, str) else json.dumps(doc).encode()
                 self.send_response(status)
-                for k, v in (hdrs or {}).items():
+                for k, v in (extra or {}).items():
                     self.send_header(k, v)
                 self.send_header("Content-Length", str(len(raw)))
                 self.end_headers()
@@ -59,7 +62,7 @@ class Stub:
         self.srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
         self.srv.daemon_threads = True
         threading.Thread(target=self.srv.serve_forever, daemon=True).start()
-        self.base = f"http://127.0.0.1:{self.srv.server_address[1]}"
+        self.api = f"http://127.0.0.1:{self.srv.server_address[1]}"
 
     def close(self):
         self.srv.shutdown()
@@ -67,39 +70,44 @@ class Stub:
 
 
 class StubCase(unittest.TestCase):
-    vendor = None
+    hosts = ("api.anthropic.com", "api.openai.com", "management-api.x.ai",
+             "bigquery.googleapis.com")
 
     def stub(self, routes):
         s = Stub(routes)
         self.addCleanup(s.close)
-        for mod, attr in ((anthropic, "BASE"), (openai, "BASE"), (xai, "BASE")):
-            old = getattr(mod, attr)
-            setattr(mod, attr, s.base)
-            self.addCleanup(setattr, mod, attr, old)
-        for attr, path in (("TOKEN_URL", "/token"), ("BQ", "/bigquery/v2")):
-            old = getattr(gcp, attr)
-            setattr(gcp, attr, s.base + path)
-            self.addCleanup(setattr, gcp, attr, old)
+        self.addCleanup(self.no_credentials, s)
+        self.s = s
         return s
 
+    def no_credentials(self, s):
+        for _method, scheme, host, path, _q, hdrs, _b in s.seen:
+            self.assertEqual(scheme, "https", path)
+            for h in CREDENTIAL_HEADERS:
+                self.assertNotIn(h, hdrs, f"FinOps sent {h} to {host}{path}")
+
     def client(self, timeout=10):
-        return Client(["127.0.0.1"], timeout=timeout)
+        return Client(self.hosts, self.s.api, timeout=timeout)
 
 
 class TheClient(unittest.TestCase):
     def test_hosts_and_schemes(self):
-        c = Client(["api.anthropic.com"])
+        c = Client(["api.anthropic.com"], "http://127.0.0.1:9")
         for url in ("https://evil.api.anthropic.com/x", "https://api.openai.com/x",
                     "http://api.anthropic.com/x"):
             with self.assertRaises(FetchError, msg=url):
                 c.json("GET", url)
 
+    def test_no_proxy_means_an_older_light(self):
+        for api in (None, "", "https://127.0.0.1:1", "http://127.0.0.1"):
+            with self.assertRaisesRegex(FetchError, "update Light"):
+                Client(["api.anthropic.com"], api)
+
 
 class Anthropic(StubCase):
     def routes(self, fail_page=None, status=200):
-        def r(method, path, q, h, body):
-            if h.get("x-api-key") != KEY or h.get("anthropic-version") != "2023-06-01":
-                return 401, {"type": "error", "error": {"type": "authentication_error"}}, {}
+        def r(method, host, path, q, h, body):
+            assert host == "api.anthropic.com" and h.get("anthropic-version") == "2023-06-01"
             if path == "/v1/organizations/me":
                 return 200, {"id": "org-1", "name": "Fixture Org", "type": "organization"}, {}
             if status != 200:
@@ -123,59 +131,60 @@ class Anthropic(StubCase):
 
     def test_pages_to_the_end_in_dollars(self):
         s = self.stub(self.routes())
-        doc = anthropic.fetch(self.client(), KEY, START, END)
+        doc = anthropic.fetch(self.client(), START, END)
         self.assertEqual(doc["days"], {"2026-09-01": {"USD": "124.0067"},
                                        "2026-10-08": {"USD": "0.01"}})
         self.assertEqual(doc["org"], {"id": "org-1", "name": "Fixture Org"})
-        q = [x[2] for x in s.seen if x[1].endswith("cost_report")]
+        q = [x[4] for x in s.seen if x[3].endswith("cost_report")]
         self.assertEqual(q[0]["starting_at"], ["2026-09-01T00:00:00Z"])
         self.assertEqual(q[0]["bucket_width"], ["1d"])
         self.assertEqual(q[1]["page"], ["p2"])
-        self.assertNotIn(KEY, json.dumps(doc))
 
     def test_a_failed_page_returns_nothing(self):
         self.stub(self.routes(fail_page="p2"))
         with self.assertRaises(FetchError) as cm:
-            anthropic.fetch(self.client(), KEY, START, END)
+            anthropic.fetch(self.client(), START, END)
         self.assertEqual(cm.exception.status, 500)
 
     def test_401_and_429(self):
-        self.stub(self.routes())
+        self.stub(lambda m, host, p, q, h, b: (401, {"type": "error", "error": {
+            "type": "authentication_error"}}, {}))
         with self.assertRaises(FetchError) as cm:
-            anthropic.fetch(self.client(), "wrong-key", START, END)
+            anthropic.fetch(self.client(), START, END)
         self.assertEqual(cm.exception.status, 401)
-        self.assertNotIn("wrong-key", str(cm.exception))
+        self.assertIn("the key was refused", str(cm.exception))
         self.stub(self.routes(status=429))
         with self.assertRaises(FetchError) as cm:
-            anthropic.fetch(self.client(), KEY, START, END)
+            anthropic.fetch(self.client(), START, END)
         self.assertEqual((cm.exception.status, cm.exception.retry_after), (429, "30"))
-        self.assertIn("rate limited", str(cm.exception))
+
+    def test_a_proxy_refusal_is_said(self):
+        self.stub(lambda m, host, p, q, h, b: (403, "not one of this grant's vendor hosts", {}))
+        with self.assertRaisesRegex(FetchError, r"refused \(403\) \[not one of this grant"):
+            anthropic.fetch(self.client(), START, END)
 
     def test_has_more_without_a_page_is_an_error(self):
-        def r(method, path, q, h, body):
+        def r(method, host, path, q, h, body):
             if path.endswith("/me"):
                 return 404, {}, {}
             return 200, {"data": [], "has_more": True, "next_page": None}, {}
         self.stub(r)
         with self.assertRaises(ValueError):
-            anthropic.fetch(self.client(), KEY, START, END)
+            anthropic.fetch(self.client(), START, END)
 
     def test_timeout(self):
-        import time
-
-        def r(method, path, q, h, body):
+        def r(method, host, path, q, h, body):
             time.sleep(3)
             return 200, {}, {}
         self.stub(r)
         with self.assertRaises(FetchError):
-            anthropic.fetch(self.client(timeout=1), KEY, START, END)
+            anthropic.fetch(self.client(timeout=1), START, END)
 
 
 class OpenAI(StubCase):
     def test_pages_and_currency(self):
-        def r(method, path, q, h, body):
-            if h.get("Authorization") != f"Bearer {KEY}":
-                return 401, {"error": {"type": "invalid_request_error"}}, {}
+        def r(method, host, path, q, h, body):
+            assert host == "api.openai.com"
             page = (q.get("page") or [""])[0]
             b = {"object": "bucket", "start_time": 1788220800 if not page else 1791417600,
                  "end_time": 0, "results": [
@@ -186,18 +195,17 @@ class OpenAI(StubCase):
             return 200, {"object": "page", "data": [b], "has_more": not page,
                          "next_page": None if page else "cur2"}, {}
         s = self.stub(r)
-        doc = openai.fetch(self.client(), KEY, START, END)
+        doc = openai.fetch(self.client(), START, END)
         self.assertEqual(doc["days"], {"2026-09-01": {"USD": "1.56"},
                                        "2026-10-08": {"USD": "1.56"}})
-        q = s.seen[0][2]
+        q = s.seen[0][4]
         self.assertEqual((q["start_time"], q["bucket_width"]), (["1788220800"], ["1d"]))
 
 
 class XAI(StubCase):
     def routes(self, scope="SCOPE_TEAM", limit=False):
-        def r(method, path, q, h, body):
-            if h.get("Authorization") != f"Bearer {KEY}":
-                return 401, {}, {}
+        def r(method, host, path, q, h, body):
+            assert host == "management-api.x.ai"
             if path == "/auth/management-keys/validation":
                 return 200, {"scope": scope, "scopeId": "team-123", "teamId": "team-123"}, {}
             if path == "/v1/billing/teams/team-123/usage" and method == "POST":
@@ -214,7 +222,7 @@ class XAI(StubCase):
 
     def test_team_spend(self):
         self.stub(self.routes())
-        doc = xai.fetch(self.client(), KEY, START, END)
+        doc = xai.fetch(self.client(), START, END)
         self.assertEqual(doc["days"], {"2026-10-01": {"USD": "1.00973725"},
                                        "2026-10-02": {"USD": "0"}})
         self.assertIn("unit", doc["notes"][0])
@@ -222,93 +230,20 @@ class XAI(StubCase):
     def test_refusals(self):
         self.stub(self.routes(scope="SCOPE_ORGANIZATION"))
         with self.assertRaises(ValueError):
-            xai.fetch(self.client(), KEY, START, END)
+            xai.fetch(self.client(), START, END)
         self.stub(self.routes(limit=True))
         with self.assertRaises(ValueError):
-            xai.fetch(self.client(), KEY, START, END)
+            xai.fetch(self.client(), START, END)
 
 
-def make_sa():
-    """A throwaway RSA key and service account JSON, or None without openssl."""
-    if not shutil.which("openssl"):
-        return None, None
-    d = tempfile.mkdtemp(prefix="finops-rsa-")
-    k = os.path.join(d, "k.pem")
-    subprocess.run(["openssl", "genpkey", "-algorithm", "RSA", "-pkeyopt", "rsa_keygen_bits:2048",
-                    "-out", k], check=True, capture_output=True)
-    with open(k) as f:
-        pem = f.read()
-    return d, {"type": "service_account", "client_email": "fx@p.iam.gserviceaccount.com",
-               "private_key": pem, "private_key_id": "abcdef0123456789abcd"}
-
-
-@unittest.skipUnless(shutil.which("openssl"), "needs openssl to make and verify a key")
-class TheSignature(unittest.TestCase):
-    def setUp(self):
-        self.dir, self.sa = make_sa()
-        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
-
-    def verify(self, msg, sig):
-        k = os.path.join(self.dir, "k.pem")
-        pub = os.path.join(self.dir, "pub.pem")
-        subprocess.run(["openssl", "pkey", "-in", k, "-pubout", "-out", pub], check=True,
-                       capture_output=True)
-        for name, data in (("m", msg), ("s", sig)):
-            with open(os.path.join(self.dir, name), "wb") as f:
-                f.write(data)
-        r = subprocess.run(["openssl", "dgst", "-sha256", "-verify", pub, "-signature",
-                            os.path.join(self.dir, "s"), os.path.join(self.dir, "m")],
-                           capture_output=True, text=True)
-        return r.returncode == 0
-
-    def test_openssl_verifies_our_signature(self):
-        for msg in (b"", b"hello", os.urandom(1000)):
-            self.assertTrue(self.verify(msg, rsa.sign(self.sa["private_key"], msg)))
-        self.assertFalse(self.verify(b"other", rsa.sign(self.sa["private_key"], b"hello")))
-
-    def test_pkcs1_pem_too(self):
-        k1 = os.path.join(self.dir, "k1.pem")
-        r = subprocess.run(["openssl", "pkey", "-in", os.path.join(self.dir, "k.pem"),
-                            "-traditional", "-out", k1], capture_output=True)
-        if r.returncode != 0:
-            self.skipTest("this openssl cannot write a traditional key")
-        with open(k1) as f:
-            pem = f.read()
-        if "BEGIN RSA PRIVATE KEY" not in pem:
-            self.skipTest("this openssl wrote PKCS#8 anyway")
-        self.assertTrue(self.verify(b"x", rsa.sign(pem, b"x")))
-
-    def test_jwt_assertion(self):
-        jwt = gcp.assertion(self.sa, 1_800_000_000)
-        head, claims, sig = jwt.split(".")
-        pad = lambda s: s + "=" * (-len(s) % 4)  # noqa: E731
-        c = json.loads(base64.urlsafe_b64decode(pad(claims)))
-        self.assertEqual((c["iss"], c["aud"], c["exp"] - c["iat"], c["scope"]),
-                         (self.sa["client_email"], gcp.TOKEN_URL, 3600, gcp.SCOPE))
-        self.assertEqual(json.loads(base64.urlsafe_b64decode(pad(head)))["alg"], "RS256")
-        self.assertTrue(self.verify(f"{head}.{claims}".encode(),
-                                    base64.urlsafe_b64decode(pad(sig))))
-
-
-@unittest.skipUnless(shutil.which("openssl"), "needs openssl to make a key")
 class GCP(StubCase):
-    def setUp(self):
-        self.dir, self.sa = make_sa()
-        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
-
     def routes(self):
-        def r(method, path, q, h, body):
-            if path == "/token":
-                f = parse_qs(body.decode())
-                assert f["grant_type"] == ["urn:ietf:params:oauth:grant-type:jwt-bearer"]
-                return 200, {"access_token": "ya29.TOKEN", "token_type": "Bearer",
-                             "expires_in": 3600}, {}
-            if h.get("Authorization") != "Bearer ya29.TOKEN":
-                return 401, {}, {}
+        def r(method, host, path, q, h, body):
+            assert host == "bigquery.googleapis.com"
             if method == "POST" and path == "/bigquery/v2/projects/my-proj-1/queries":
                 b = json.loads(body)
-                assert b["useLegacySql"] is False and "`my-proj-1.billing.gcp_billing_export_v1_X`" \
-                    in b["query"]
+                assert b["useLegacySql"] is False and \
+                    "`my-proj-1.billing.gcp_billing_export_v1_X`" in b["query"]
                 return 200, {"jobComplete": False, "jobReference": {
                     "projectId": "my-proj-1", "jobId": "job_1", "location": "US"}}, {}
             if path == "/bigquery/v2/projects/my-proj-1/queries/job_1":
@@ -323,22 +258,19 @@ class GCP(StubCase):
             return 404, {}, {}
         return r
 
-    def test_token_query_poll_and_pages(self):
+    def test_query_poll_and_pages(self):
         self.stub(self.routes())
-        doc = gcp.fetch(self.client(), json.dumps(self.sa), START, END,
+        doc = gcp.fetch(self.client(), START, END,
                         {"table": "my-proj-1.billing.gcp_billing_export_v1_X"})
         self.assertEqual(doc["days"], {"2026-10-01": {"USD": "10.5"},
                                        "2026-10-02": {"EUR": "-0.25"}})
-        self.assertNotIn(self.sa["private_key"][40:80], json.dumps(doc))
 
-    def test_bad_params_and_keys(self):
+    def test_bad_params(self):
         self.stub(self.routes())
         for p in ({}, {"table": "x"}, {"table": "p.d.t`; DROP"},
                   {"table": "my-proj-1.d.t", "location": "us central"}):
             with self.assertRaises(ValueError, msg=p):
-                gcp.fetch(self.client(), json.dumps(self.sa), START, END, p)
-        with self.assertRaises(ValueError):
-            gcp.fetch(self.client(), "not json", START, END, {"table": "my-proj-1.d.t"})
+                gcp.fetch(self.client(), START, END, p)
 
 
 class Window(unittest.TestCase):
@@ -353,27 +285,17 @@ class Window(unittest.TestCase):
         for bad in (None, True, "x", "NaN", "Infinity"):
             with self.assertRaises(ValueError):
                 dec(bad)
-        self.assertEqual(hashlib.sha256(b"").hexdigest()[:4], "e3b0")
-
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 class TheEntry(StubCase):
-    """fetcher.run(): the vendor, key file, hosts and params come from the
-    environment Light sets; nothing else is read."""
+    """fetcher.run(): vendor, hosts, params and the proxy come from the
+    environment Light sets; there is no key to read."""
 
     def test_run_from_the_environment(self):
         from finops import fetch
-        d = tempfile.mkdtemp(prefix="finops-entry-")
-        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
-        kp = os.path.join(d, "key")
-        with open(kp, "w") as f:
-            f.write(KEY + "\n")
         self.stub(Anthropic.routes(Anthropic()))
-        env = {"CORRAL_FETCH_VENDOR": "anthropic", "CORRAL_FETCH_KEY": kp,
-               "CORRAL_FETCH_HOSTS": "127.0.0.1", "CORRAL_FETCH_PARAM_TABLE": "x"}
+        env = {"CORRAL_FETCH_VENDOR": "anthropic", "CORRAL_FETCH_API": self.s.api,
+               "CORRAL_FETCH_HOSTS": "api.anthropic.com", "CORRAL_FETCH_PARAM_TABLE": "x"}
         doc = fetch.run(env, now=1791466622)
         self.assertEqual((doc["schema"], doc["vendor"], doc["range"]),
                          ("finops.billed/1", "anthropic",
@@ -383,7 +305,19 @@ class TheEntry(StubCase):
         with self.assertRaises(FetchError):
             fetch.run(dict(env, CORRAL_FETCH_VENDOR="evil"))
         with self.assertRaises(FetchError):           # a host not granted
-            fetch.run(dict(env, CORRAL_FETCH_HOSTS="api.anthropic.com"), now=1791466622)
+            fetch.run(dict(env, CORRAL_FETCH_HOSTS="api.openai.com"), now=1791466622)
+        with self.assertRaisesRegex(FetchError, "update Light"):
+            fetch.run({k: v for k, v in env.items() if k != "CORRAL_FETCH_API"})
+
+    def test_no_key_is_read(self):
+        from finops import fetch
+        self.stub(Anthropic.routes(Anthropic()))
+        d = tempfile.mkdtemp(prefix="finops-entry-")
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        env = {"CORRAL_FETCH_VENDOR": "anthropic", "CORRAL_FETCH_API": self.s.api,
+               "CORRAL_FETCH_HOSTS": "api.anthropic.com",
+               "CORRAL_FETCH_KEY": os.path.join(d, "absent")}
+        fetch.run(env, now=1791466622)           # an old variable is simply ignored
 
 
 class PanelFixes(StubCase):
@@ -392,27 +326,27 @@ class PanelFixes(StubCase):
     def test_malformed_openai_results_fail_the_fetch(self):
         for bad in ([{"start_time": 1788220800, "results": [{}]}], ["not a bucket"],
                     [{"start_time": 1788220800}]):
-            self.stub(lambda m, p, q, h, b, bad=bad: (200, {"data": bad, "has_more": False}, {}))
+            self.stub(lambda m, host, p, q, h, b, bad=bad: (200, {"data": bad,
+                                                                  "has_more": False}, {}))
             with self.assertRaises(ValueError, msg=bad):
-                openai.fetch(self.client(), KEY, START, END)
+                openai.fetch(self.client(), START, END)
 
     def test_amounts_keep_every_cent(self):
         raw = ('{"data": [{"start_time": 1788220800, "results": [{"amount": '
                '{"value": 90071992547409.91, "currency": "usd"}}]}], "has_more": false}')
-        self.stub(lambda m, p, q, h, b: (200, raw, {}))
-        doc = openai.fetch(self.client(), KEY, START, END)
+        self.stub(lambda m, host, p, q, h, b: (200, raw, {}))
+        doc = openai.fetch(self.client(), START, END)
         self.assertEqual(doc["days"]["2026-09-01"]["USD"], "90071992547409.91")
 
     def test_an_odd_xai_team_id_is_refused(self):
-        def r(method, path, q, h, body):
+        def r(method, host, path, q, h, body):
             if path == "/auth/management-keys/validation":
                 return 200, {"scope": "SCOPE_TEAM", "scopeId": "abc?x=1"}, {}
             return 404, {}, {}
         self.stub(r)
         with self.assertRaises(ValueError):
-            xai.fetch(self.client(), KEY, START, END)
+            xai.fetch(self.client(), START, END)
 
-    def test_truncated_der_is_a_value_error(self):
-        for body in ("MA==", "", "MAo="):
-            with self.assertRaises(ValueError):
-                rsa.private_key(f"-----BEGIN {'PRIVATE'} KEY-----\n{body}\n-----END {'PRIVATE'} KEY-----")
+
+if __name__ == "__main__":
+    unittest.main()

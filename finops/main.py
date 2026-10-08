@@ -100,8 +100,8 @@ BILLING_HELP = """Billing APIs (optional; organization accounts with pay-per-cal
 Subscriptions (Claude Max, ChatGPT Plus, SuperGrok) have no billing API. If
 you also pay for API use through an organization, FinOps can show what that
 organization was billed, day by day, beside the rest. It is never added to
-Committed. Each vendor needs a key you create once; FinOps never sees it
-outside Light's fetch sandbox, which reaches only that vendor's hosts.
+Committed. Each vendor needs a key you create once. FinOps never sees it:
+Light keeps it and adds it to each request to that vendor's own hosts.
 
   Anthropic  Console > Settings > Admin keys (sk-ant-admin...). Organization
              accounts only. Anthropic documents no read-only admin key: this key

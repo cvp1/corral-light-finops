@@ -2,7 +2,7 @@
   "schema": "corral-light.manifest/1",
   "name": "finops",
   "title": "FinOps",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "core_api": 1,
   "summary": "What your lanes cost, and how much quota is left",
   "collector": {"script": "collector.py", "args": ["snapshot", "--budget", "25"],
