@@ -135,7 +135,9 @@ class Schema(HostCase):
         led.db.execute("UPDATE meta SET value='99' WHERE key='schema'")
         led.close()
         snap, _ = self.h.run()
-        aside = [n for n in os.listdir(self.h.data) if n.startswith("ledger.db.v99")]
+        # The database itself, not its -wal or -shm (listing order differs by OS).
+        aside = [n for n in os.listdir(self.h.data) if n.startswith("ledger.db.v99")
+                 and not n.endswith(("-wal", "-shm"))]
         self.assertTrue(aside)
         con = sqlite3.connect(os.path.join(self.h.data, aside[0]))
         self.assertEqual(con.execute("SELECT value FROM meta").fetchone()[0], "99")

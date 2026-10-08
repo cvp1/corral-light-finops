@@ -42,7 +42,7 @@ class Stub:
                 stub.seen.append((method, u.path, parse_qs(u.query), dict(self.headers), body))
                 status, doc, hdrs = routes(method, u.path, parse_qs(u.query),
                                            self.headers, body)
-                raw = json.dumps(doc).encode()
+                raw = doc.encode() if isinstance(doc, str) else json.dumps(doc).encode()
                 self.send_response(status)
                 for k, v in (hdrs or {}).items():
                     self.send_header(k, v)
@@ -384,3 +384,35 @@ class TheEntry(StubCase):
             fetch.run(dict(env, CORRAL_FETCH_VENDOR="evil"))
         with self.assertRaises(FetchError):           # a host not granted
             fetch.run(dict(env, CORRAL_FETCH_HOSTS="api.anthropic.com"), now=1791466622)
+
+
+class PanelFixes(StubCase):
+    """Findings of the 2026-10-08 panel on Phase 4."""
+
+    def test_malformed_openai_results_fail_the_fetch(self):
+        for bad in ([{"start_time": 1788220800, "results": [{}]}], ["not a bucket"],
+                    [{"start_time": 1788220800}]):
+            self.stub(lambda m, p, q, h, b, bad=bad: (200, {"data": bad, "has_more": False}, {}))
+            with self.assertRaises(ValueError, msg=bad):
+                openai.fetch(self.client(), KEY, START, END)
+
+    def test_amounts_keep_every_cent(self):
+        raw = ('{"data": [{"start_time": 1788220800, "results": [{"amount": '
+               '{"value": 90071992547409.91, "currency": "usd"}}]}], "has_more": false}')
+        self.stub(lambda m, p, q, h, b: (200, raw, {}))
+        doc = openai.fetch(self.client(), KEY, START, END)
+        self.assertEqual(doc["days"]["2026-09-01"]["USD"], "90071992547409.91")
+
+    def test_an_odd_xai_team_id_is_refused(self):
+        def r(method, path, q, h, body):
+            if path == "/auth/management-keys/validation":
+                return 200, {"scope": "SCOPE_TEAM", "scopeId": "abc?x=1"}, {}
+            return 404, {}, {}
+        self.stub(r)
+        with self.assertRaises(ValueError):
+            xai.fetch(self.client(), KEY, START, END)
+
+    def test_truncated_der_is_a_value_error(self):
+        for body in ("MA==", "", "MAo="):
+            with self.assertRaises(ValueError):
+                rsa.private_key(f"-----BEGIN {'PRIVATE'} KEY-----\n{body}\n-----END {'PRIVATE'} KEY-----")

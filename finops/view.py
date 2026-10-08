@@ -46,10 +46,12 @@ def quota_text(w, now, tz):
         level = "info"
     else:
         level = _level_for(w["bp"], w["state"])
-        if w["status"] == "rejected":
-            level = "bad"
-        elif w["status"] == "allowed_warning" and level == "ok":
-            level = "warn"
+    # A status the report kept is current (report clears a stale one), so it
+    # counts even with no percent or an older percent (panel, 2026-10-08).
+    if w["status"] == "rejected":
+        level = "bad"
+    elif w["status"] == "allowed_warning" and level != "bad":
+        level = "warn"
     return value, "; ".join(note), level
 
 
@@ -140,7 +142,10 @@ def build(env, ledger, feed, cfg, plans, prices, scan=None, now=None):
         tiles.append({"label": "Committed", "kind": "unknown", "value": "unreported",
                       "note": "no plan price is known; type yours in "
                               "`corral-light finops setup`", "fresh_at": gen, "level": "info"})
-    for w in sorted(quota, key=lambda w: (w["state"] != "current", -(w["bp"] or -1)))[:4]:
+    rank = {"bad": 0, "warn": 1}
+    shown = sorted(quota, key=lambda w: (rank.get(quota_text(w, now, tz)[2], 2),
+                                         w["state"] != "current", -(w["bp"] or -1)))
+    for w in shown[:max(4, sum(1 for x in shown if quota_text(x, now, tz)[2] in rank))]:
         value, note, level = quota_text(w, now, tz)
         tiles.append({"label": w["label"], "value": value, "kind": "vendor", "note": note,
                       "fresh_at": util.utc_iso(w["observed_at"]) if w["observed_at"] else "",
@@ -160,8 +165,10 @@ def build(env, ledger, feed, cfg, plans, prices, scan=None, now=None):
     for b in billed.accounts(ledger):
         name = b["org_name"] or (f"{VENDOR_TITLES.get(b['vendor'], b['vendor'])} "
                                  f"API ({b['account'][4:]})")
-        first, nxt = util.month_days(now, tz)
-        prev_first = util.month_days(util.month_start(now, tz) - 86400, tz)[0]
+        # Billed days are UTC dates, so their months are UTC months.
+        utc = util.zone("UTC")
+        first, nxt = util.month_days(now, utc)
+        prev_first = util.month_days(util.month_start(now, utc) - 86400, utc)[0]
         this_m = billed.totals(ledger, b["account"], first, nxt)
         last_m = billed.totals(ledger, b["account"], prev_first, first)
         age = now - util.iso_s(b["fetched_at"]) if b["fetched_at"] else None
@@ -169,7 +176,7 @@ def build(env, ledger, feed, cfg, plans, prices, scan=None, now=None):
         tiles.append({"label": f"Billed: {name}"[:80], "value": money(this_m),
                       "kind": "billed",
                       "note": f"{VENDOR_TITLES.get(b['vendor'], b['vendor'])} billing API, "
-                              f"{month} (UTC days); fetched "
+                              f"{util.month_label(now, utc)} (UTC days); fetched "
                               f"{util.age_text(age) + ' ago' if age is not None else 'never'}"
                               + ("; stale" if stale else "") + "; never part of Committed",
                       "fresh_at": b["fetched_at"] or "", "level": "info"})
@@ -222,7 +229,9 @@ def build(env, ledger, feed, cfg, plans, prices, scan=None, now=None):
 
     if api_rows:
         view.append({"type": "table", "title": "Billing APIs (organizations, billed)",
-                     "columns": ["Organization", "Vendor", month, "Last month", "Fetched"],
+                     "columns": ["Organization", "Vendor",
+                                 util.month_label(now, util.zone("UTC")) + " (UTC)",
+                                 "Last month", "Fetched"],
                      "rows": api_rows})
 
     # ── sources ──

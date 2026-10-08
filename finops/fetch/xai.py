@@ -1,6 +1,9 @@
 """xAI Management API: the team's daily spend. The team comes from the
 management key's own validation. The `usd` value's unit is not stated in
 xAI's reference; its example reads as dollars, and the result says so."""
+import re
+import urllib.parse
+
 from finops.fetch.common import Days, dec, day_of, result
 
 BASE = "https://management-api.x.ai"
@@ -20,7 +23,7 @@ def fetch(client, key, start, end, params=None):
         team = v.get("teamId")
     else:
         team = None
-    if not isinstance(team, str) or not team or "/" in team or len(team) > 80:
+    if not isinstance(team, str) or not re.match(r"^[A-Za-z0-9_-]{1,80}$", team):
         raise ValueError("this management key is not scoped to one team; FinOps reads "
                          "team-scoped keys only")
     days = Days()
@@ -31,7 +34,8 @@ def fetch(client, key, start, end, params=None):
         "timeUnit": "TIME_UNIT_DAY",
         "values": [{"name": "usd", "aggregation": "AGGREGATION_SUM"}],
         "groupBy": ["description"], "filters": []}}
-    doc = client.json("POST", f"{BASE}/v1/billing/teams/{team}/usage", h, body=body)
+    doc = client.json("POST", f"{BASE}/v1/billing/teams/{urllib.parse.quote(team, safe='')}/usage",
+                      h, body=body)
     series = doc.get("timeSeries") if isinstance(doc, dict) else None
     if not isinstance(series, list):
         raise ValueError("the usage response has no timeSeries list")

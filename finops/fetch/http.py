@@ -7,6 +7,7 @@ to 127.0.0.1 (the test stubs). Error text carries the status and the
 vendor's error type, never a header, a URL query or a key.
 """
 import json
+from decimal import Decimal
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -67,7 +68,8 @@ class Client:
         if len(raw) > MAX_BODY:
             raise FetchError(f"{host}: the response is larger than 8 MiB")
         try:
-            return json.loads(raw.decode("utf-8"))
+            # Decimal, not float: an amount must not lose a cent on the way.
+            return json.loads(raw.decode("utf-8"), parse_float=Decimal)
         except (UnicodeDecodeError, ValueError):
             raise FetchError(f"{host}: the response is not JSON") from None
 

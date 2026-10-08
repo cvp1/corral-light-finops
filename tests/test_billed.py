@@ -97,3 +97,29 @@ class Billed(HostCase):
         self.h.fetched = None
         snap, _ = self.h.run()
         self.assertFalse([b for b in snap["view"] if b.get("title", "").startswith("Billing")])
+
+
+class PanelFixes(Billed):
+    """Findings of the 2026-10-08 panel on Phase 4."""
+
+    def test_an_empty_fetch_keeps_earlier_days(self):
+        self.put(stored())
+        self.h.run()
+        self.put(stored(at="2026-10-07T18:00:00Z", days={}))
+        snap, _ = self.h.run()
+        led = self.h.ledger()
+        try:
+            self.assertEqual(led.one("SELECT COUNT(*) FROM billed_day"), 3)
+        finally:
+            led.close()
+        self.assertTrue(any("earlier figures for that range are kept" in n for n in notes(snap)))
+
+    def test_billed_months_are_utc_months(self):
+        # 01:00 on 1 October in Auckland is still 30 September in UTC.
+        self.h.tz = "Pacific/Auckland"
+        self.h.now = 1790769600.0                     # 2026-09-30T12:00:00Z
+        self.put(stored(days={"2026-09-30": {"USD": "100.10"}}))
+        snap, _ = self.h.run()
+        t = tile(snap, "Billed: Fixture Org")
+        self.assertEqual(t["value"], "$100.10")
+        self.assertIn("September 2026 (UTC days)", t["note"])

@@ -24,7 +24,7 @@ TABLE_RE = re.compile(r"^([a-z][a-z0-9-]{4,61}[a-z0-9])\.([A-Za-z0-9_]{1,1024})\
 PROJECT_RE = re.compile(r"^[a-z][a-z0-9-]{4,61}[a-z0-9]$")
 LOCATION_RE = re.compile(r"^[A-Za-z0-9-]{2,40}$")
 SQL = ("SELECT FORMAT_DATE('%Y-%m-%d', DATE(usage_start_time)) AS day, currency, "
-       "CAST(SUM(CAST(cost AS NUMERIC)) + SUM(IFNULL((SELECT SUM(CAST(c.amount AS NUMERIC)) "
+       "CAST(SUM(IFNULL(CAST(cost AS NUMERIC), 0)) + SUM(IFNULL((SELECT SUM(CAST(c.amount AS NUMERIC)) "
        "FROM UNNEST(credits) c), 0)) AS STRING) AS net "
        "FROM `{table}` WHERE DATE(usage_start_time) >= @start AND DATE(usage_start_time) < @end "
        "GROUP BY day, currency ORDER BY day")

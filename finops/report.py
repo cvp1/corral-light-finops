@@ -304,6 +304,14 @@ def quota(ledger, feed, now):
                     "state": freshness(now, ts, resets, length, 5 * HOUR),
                     "status": None, "resets_at": resets, "observed_at": ts,
                     "length_s": length})
+    # Two accounts of one vendor would show two identical labels: add a
+    # short piece of the fingerprint to tell them apart (panel, 2026-10-08).
+    seen = {}
+    for w in out:
+        seen.setdefault(w["label"], set()).add(w["account"])
+    for w in out:
+        if len(seen[w["label"]]) > 1:
+            w["label"] += " · " + w["account"].split(":", 1)[-1][:6]
     return out
 
 

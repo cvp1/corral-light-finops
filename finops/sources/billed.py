@@ -86,10 +86,17 @@ def ingest(ledger, fetched_dir, notes=None):
         old = ledger.one("SELECT fetched_at FROM billed_fetch WHERE account=?", (acct,))
         if old is not None and old >= at:
             continue
+        had = ledger.one("SELECT COUNT(*) FROM billed_day WHERE account=? AND day>=? AND day<?",
+                         (acct, start, end)) or 0
+        keep = not rows and had
+        if keep and notes is not None:
+            notes.append(f"A {vendor} billing fetch returned no days; the earlier figures "
+                         f"for that range are kept.")
         ledger.begin()
         try:
-            ledger.db.execute("DELETE FROM billed_day WHERE account=? AND day>=? AND day<?",
-                              (acct, start, end))
+            if not keep:
+                ledger.db.execute("DELETE FROM billed_day WHERE account=? AND day>=? AND day<?",
+                                  (acct, start, end))
             ledger.db.executemany("INSERT INTO billed_day VALUES (?,?,?,?)",
                                   [(acct, d, c, a) for d, c, a in rows])
             ledger.db.execute(

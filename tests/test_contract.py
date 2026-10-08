@@ -157,7 +157,9 @@ class EntryPoints(HostCase):
                 break
         else:
             self.fail("backfill did not finish")
-        peak_mb = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss / 1024
+        # ru_maxrss is KiB on Linux, bytes on macOS.
+        peak = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
+        peak_mb = peak / (1024 * 1024 if sys.platform == "darwin" else 1024)
         self.assertLess(peak_mb, 200)
 
 

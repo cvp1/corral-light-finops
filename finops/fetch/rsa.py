@@ -15,6 +15,8 @@ SHA256_PREFIX = bytes.fromhex("3031300d060960864801650304020105000420")
 
 def _der(buf, i):
     """-> (tag, value bytes, next index) for one DER element at buf[i]."""
+    if i + 2 > len(buf):
+        raise ValueError("truncated DER")
     tag = buf[i]
     n = buf[i + 1]
     i += 2

@@ -112,3 +112,44 @@ class Notices(HostCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PanelFixes(Notices):
+    """Findings of the 2026-10-08 panel on Phase 3."""
+
+    def test_allowed_warning_without_a_percent_warns(self):
+        w = self.obs("five_hour", None, self.h.now + H, 60, status="allowed_warning")
+        del w["utilization"]
+        self.claude_quota({"five_hour": w})
+        snap, _ = self.h.run()
+        n = self.notices(snap)["quota.claude-fp-claude-1.five_hour"]
+        self.assertEqual(n["level"], "warn")
+        self.assertEqual(n["title"], "Claude 5 h: near its limit")
+        self.assertEqual(tile(snap, "Claude 5 h")["level"], "warn")
+
+    def test_a_fresh_status_counts_over_an_older_percent(self):
+        w = self.obs("five_hour", 0.2, self.h.now + H, 60, status="rejected",
+                     carried={"utilization": self.h.now - 6 * H})
+        self.claude_quota({"five_hour": w})
+        snap, _ = self.h.run()
+        self.assertEqual(self.notices(snap)["quota.claude-fp-claude-1.five_hour"]["level"], "bad")
+        self.assertEqual(tile(snap, "Claude 5 h")["level"], "bad")
+
+    def test_two_accounts_get_told_apart(self):
+        self.h.feed_json("quota.json", {"schema": "corral-light.module-feed/1", "accounts": {
+            fp: {"lane": "claude", "windows": {
+                "five_hour": self.obs("five_hour", 0.8, self.h.now + H, 60)}}
+            for fp in ("aaaaaa1111", "bbbbbb2222")}})
+        snap, _ = self.h.run()
+        titles = sorted(n["title"] for n in snap["notices"])
+        self.assertEqual(titles, ["Claude 5 h · aaaaaa 80% used", "Claude 5 h · bbbbbb 80% used"])
+
+    def test_every_notice_has_its_tile(self):
+        windows = {f"seven_day_{k}": self.obs(f"seven_day_{k}", 0.1, self.h.now + D, 60)
+                   for k in ("a", "b", "c", "d", "e")}
+        windows["five_hour"] = self.obs("five_hour", None, self.h.now + H, 60, status="rejected")
+        del windows["five_hour"]["utilization"]
+        self.claude_quota(windows)
+        snap, _ = self.h.run()
+        self.assertTrue(snap["notices"])
+        self.assertEqual(tile(snap, "Claude 5 h")["level"], "bad")

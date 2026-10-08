@@ -26,13 +26,16 @@ def fetch(client, key, start, end, params=None):
         if not isinstance(data, list):
             raise ValueError("the response has no data list")
         for b in data:
-            if not isinstance(b, dict):
-                continue
+            # Anything malformed fails the fetch: a run that skipped it would
+            # report an empty day and replace a complete one.
+            if not isinstance(b, dict) or not isinstance(b.get("results"), list):
+                raise ValueError("a costs bucket without a results list")
             day = datetime.fromtimestamp(int(b["start_time"]), timezone.utc).strftime("%Y-%m-%d")
-            for r in b.get("results") or []:
+            for r in b["results"]:
                 amt = r.get("amount") if isinstance(r, dict) else None
-                if isinstance(amt, dict):
-                    days.add(day, amt.get("currency") or "usd", dec(amt.get("value")))
+                if not isinstance(amt, dict) or not amt.get("currency"):
+                    raise ValueError("a costs result without an amount and currency")
+                days.add(day, amt["currency"], dec(amt.get("value")))
         if not doc.get("has_more"):
             break
         page = doc.get("next_page")
