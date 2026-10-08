@@ -14,7 +14,8 @@ USAGE = """usage: corral-light finops <verb>
   setup [--yes]        accept proposed accounts; type what you pay (once)
   accounts [--json]    the accounts FinOps sees, accepted or proposed
   show [--json]        the dialog's figures as text (or the raw snapshot)
-  doctor               how each source is read, and anything wrong"""
+  doctor               how each source is read, and anything wrong
+  billing              how to connect an organization's billing API (optional)"""
 
 
 def _opt(args, name, default=None):
@@ -84,11 +85,53 @@ def cli_main(argv, env=None, out=None, ask=None):
             return show(env, as_json="--json" in rest, out=out)
         if verb == "doctor":
             return doctor(env, out=out)
+        if verb == "billing":
+            print(BILLING_HELP, file=out)
+            return 0
     except (PriceError, ConfigError) as e:
         print(f"finops: {e}", file=sys.stderr)
         return 1
     print(USAGE, file=sys.stderr)
     return 2
+
+
+BILLING_HELP = """Billing APIs (optional; organization accounts with pay-per-call keys only).
+
+Subscriptions (Claude Max, ChatGPT Plus, SuperGrok) have no billing API. If
+you also pay for API use through an organization, FinOps can show what that
+organization was billed, day by day, beside the rest. It is never added to
+Committed. Each vendor needs a key you create once; FinOps never sees it
+outside Light's fetch sandbox, which reaches only that vendor's hosts.
+
+  Anthropic  Console > Settings > Admin keys (sk-ant-admin...). Organization
+             accounts only. Anthropic documents no read-only admin key: this key
+             can manage your organization, so keep it to this one use.
+  OpenAI     Platform > Settings > Organization > Admin keys. Owners and
+             admins only. OpenAI documents no read-only admin key either.
+  xAI        Console > Settings > Management keys, scoped to one team.
+  Google     A service account with roles/bigquery.jobUser on the project
+             and roles/bigquery.dataViewer on your Cloud Billing export
+             dataset; download its JSON key. Needs billing export to BigQuery
+             switched on (Billing > Billing export).
+
+Then store the key with Light (it asks for it without echoing it) and grant
+it to FinOps for that vendor:
+
+  corral-light module key add anthropic-admin
+  corral-light module grant finops anthropic-admin anthropic
+
+  corral-light module key add openai-admin
+  corral-light module grant finops openai-admin openai
+
+  corral-light module key add xai-team
+  corral-light module grant finops xai-team xai
+
+  corral-light module key add gcp-billing < service-account.json
+  corral-light module grant finops gcp-billing gcp \\
+      --param table=PROJECT.DATASET.gcp_billing_export_v1_XXXXXX_XXXXXX_XXXXXX
+
+Fetch now with `corral-light module fetch finops`; afterwards it runs every
+six hours. Take a key back with `corral-light module revoke finops <key>`."""
 
 
 def _state(env, budget_s=25):

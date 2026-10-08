@@ -5,8 +5,10 @@ Null is unreported, never zero: a figure with no source says so.
 """
 import hashlib
 import re
+from decimal import Decimal
 
 from finops import report, util
+from finops.sources import billed
 from finops.util import usd, usd_cents
 
 SCHEMA = "corral-light.module/1"
@@ -53,6 +55,8 @@ def quota_text(w, now, tz):
 
 _NOTICE_BAD = re.compile(r"[^a-z0-9._-]")
 SOURCES = ("claude", "codex", "grok", "gemini")
+VENDOR_TITLES = {"anthropic": "Anthropic", "openai": "OpenAI", "xai": "xAI",
+                 "gcp": "Google Cloud"}
 
 
 def notice_id(*parts):
@@ -150,6 +154,29 @@ def build(env, ledger, feed, cfg, plans, prices, scan=None, now=None):
         tiles.append({"label": f"Grok, {month}", "value": usd(g.vendor_micros), "kind": "vendor",
                       "note": "computed by the Grok CLI (not a bill)", "fresh_at": gen,
                       "level": "info"})
+    # Billing APIs (plan §6.7): each org on its own tile, kind billed, in the
+    # vendor's currency; never added to Committed or to a subscription.
+    api_rows = []
+    for b in billed.accounts(ledger):
+        name = b["org_name"] or (f"{VENDOR_TITLES.get(b['vendor'], b['vendor'])} "
+                                 f"API ({b['account'][4:]})")
+        first, nxt = util.month_days(now, tz)
+        prev_first = util.month_days(util.month_start(now, tz) - 86400, tz)[0]
+        this_m = billed.totals(ledger, b["account"], first, nxt)
+        last_m = billed.totals(ledger, b["account"], prev_first, first)
+        age = now - util.iso_s(b["fetched_at"]) if b["fetched_at"] else None
+        stale = age is None or age > 2 * 86400
+        tiles.append({"label": f"Billed: {name}"[:80], "value": money(this_m),
+                      "kind": "billed",
+                      "note": f"{VENDOR_TITLES.get(b['vendor'], b['vendor'])} billing API, "
+                              f"{month} (UTC days); fetched "
+                              f"{util.age_text(age) + ' ago' if age is not None else 'never'}"
+                              + ("; stale" if stale else "") + "; never part of Committed",
+                      "fresh_at": b["fetched_at"] or "", "level": "info"})
+        api_rows.append([name, VENDOR_TITLES.get(b["vendor"], b["vendor"]),
+                         money(this_m), money(last_m),
+                         util.age_text(age) + " ago" if age is not None else "never"])
+        notes.extend(n for n in b["notes"] if n not in notes)
     total_list = sum(t.list_micros for k, t in per_vendor.items())
     unpriced = sum(t.unpriced_tokens for t in per_vendor.values())
     tiles.append({"label": f"API-equivalent list cost, {month}",
@@ -192,6 +219,11 @@ def build(env, ledger, feed, cfg, plans, prices, scan=None, now=None):
                  "columns": ["Account", "Lane", "Plan", "Committed / mo", "Tokens",
                              "API-equivalent list cost", "Vendor-computed cost", "Source"],
                  "rows": rows})
+
+    if api_rows:
+        view.append({"type": "table", "title": "Billing APIs (organizations, billed)",
+                     "columns": ["Organization", "Vendor", month, "Last month", "Fetched"],
+                     "rows": api_rows})
 
     # ── sources ──
     view.append({"type": "table", "title": "Sources",
@@ -238,6 +270,17 @@ def build(env, ledger, feed, cfg, plans, prices, scan=None, now=None):
         snap["progress"] = {"phase": "backfill", "done_pct": scan.done_pct(),
                             "note": f"reading history: {scan.pending_files} files to go"}
     return snap
+
+
+def money(by_cur):
+    """{currency: Decimal} -> text; dollars as $, others with their code."""
+    if not by_cur:
+        return "$0.00"
+    parts = []
+    for cur, v in sorted(by_cur.items(), key=lambda kv: (kv[0] != "USD", kv[0])):
+        q = v.quantize(Decimal("0.01"))
+        parts.append(f"${q:,}" if cur == "USD" else f"{q:,} {cur}")
+    return " + ".join(parts)
 
 
 def _list_text(t):

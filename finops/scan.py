@@ -10,7 +10,7 @@ import time
 
 from finops import VERSION
 from finops.ledger import Ledger
-from finops.sources import claude, codex, gemini, grok
+from finops.sources import billed, claude, codex, gemini, grok
 from finops.sources.feed import Feed, note_logins
 from finops.sources.lines import Tally
 
@@ -61,6 +61,7 @@ def run(env, budget_s, ledger=None):
     except BaseException:
         ledger.rollback()
         raise
+    billed.ingest(ledger, env.fetched, res.notes)
     t = res.tallies.setdefault("grok", Tally())
     if not _frozen(ledger, "grok"):
         grok.refresh(ledger, env.feed, t)

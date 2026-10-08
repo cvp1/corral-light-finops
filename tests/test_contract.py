@@ -68,6 +68,8 @@ class Contract(HostCase):
         self.assertEqual(m["network"], "none")
         self.assertEqual(m["vendor_reports"], ["grok-usage"])
         self.assertIs(m["notices"], True)
+        self.assertEqual(m["fetcher"]["vendors"], ["anthropic", "gcp", "openai", "xai"])
+        self.assertEqual(m["fetcher"]["script"], "fetcher.py")
         self.assertLessEqual(m["collector"]["budget_s"], m["collector"]["timeout_s"])
 
     def test_most_used_joins_panes_and_groups(self):

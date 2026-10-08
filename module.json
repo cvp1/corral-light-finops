@@ -2,7 +2,7 @@
   "schema": "corral-light.manifest/1",
   "name": "finops",
   "title": "FinOps",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "core_api": 1,
   "summary": "What your lanes cost, and how much quota is left",
   "collector": {"script": "collector.py", "args": ["snapshot", "--budget", "25"],
@@ -12,5 +12,8 @@
   "reads": ["claude-projects", "codex-sessions", "gemini-store", "light-feed"],
   "vendor_reports": ["grok-usage"],
   "network": "none",
-  "notices": true
+  "notices": true,
+  "fetcher": {"script": "fetcher.py", "args": [],
+              "vendors": ["anthropic", "openai", "xai", "gcp"],
+              "every_s": 21600, "timeout_s": 90}
 }

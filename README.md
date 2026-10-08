@@ -26,6 +26,7 @@ accepts every account and records no prices.
 | **Quota** windows | `vendor` | Claude rate-limit notices (through Light's feed); Codex `rate_limits` in its rollouts |
 | **Grok cost** this month | `vendor` | the Grok CLI's own `grok usage`, run by Light in its sandbox; not a bill |
 | **API-equivalent list cost** this month | `list` | local token counts priced at API list prices (`data/prices.toml`); not a bill, never added to a plan |
+| **Billed** this month, per organization | `billed` | only if you connect a billing API (below); what the vendor billed, in its currency; never added to Committed |
 
 Then a table by account, the state of each source, and the panes, consult
 panels and worktrees that used the most this week.
@@ -35,6 +36,39 @@ corral-light finops show        # the dialog as text
 corral-light finops accounts    # accepted and proposed accounts
 corral-light finops doctor      # parse rates, unpriced models, diagnostics
 ```
+
+### Billing APIs (optional)
+
+If you also pay for API use through an organization, FinOps can show what
+each organization was billed, day by day. Subscriptions have no billing
+API, so this is for pay-per-call accounts only:
+
+| Vendor | Key | Read-only? |
+|---|---|---|
+| Anthropic | an Admin API key (organization accounts) | no read-only admin key is documented |
+| OpenAI | an organization Admin key (owners and admins) | no read-only admin key is documented |
+| xAI | a Management key scoped to one team | billing permissions are not documented |
+| Google Cloud | a service account JSON key reading your Cloud Billing export in BigQuery | yes: `roles/bigquery.jobUser` and `roles/bigquery.dataViewer` |
+
+Keys never reach FinOps's config. Light stores them (mode 0600), and you
+grant one key to FinOps for one vendor. Each fetch runs in Light's sandbox
+and can reach only that vendor's own hosts. Light refuses any result that
+contains the key, and keeps it out of every error message.
+
+```
+corral-light finops billing                        # where to create each key, step by step
+corral-light module key add anthropic-admin        # asks for the key without echoing it
+corral-light module grant finops anthropic-admin anthropic
+corral-light module fetch finops                   # now; then every six hours
+corral-light module revoke finops anthropic-admin  # take it back; its figures go too
+```
+
+Units, as each vendor documents them: Anthropic reports cents, which
+FinOps turns into dollars. OpenAI's and xAI's figures are read as whole
+dollars, as in their examples, since their references don't say. Google's
+figure is cost net of credits, in your billing account's currency, by UTC
+day. Billing APIs need a Light with module fetchers; older Lights refuse
+this manifest, so update Light first.
 
 ### Notices in Light's rail
 

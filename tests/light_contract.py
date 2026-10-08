@@ -1,10 +1,10 @@
 """Corral Light's module contract, vendored for this module's tests.
 
 Copied verbatim (whole top-level definitions) from Light's
-modules.py at commit a8a8ca81576ddb350486c288b0bfad7b6ad283f5 (branch finops-phase3-plan,
-2026-10-08): the manifest checks (validate_manifest) and the snapshot
-validator (validate_snapshot), with the rail notice checks (plan §4.7).
-Re-vendor when Light's core_api or snapshot contract changes.
+modules.py at commit 1409240efa64a94edcd9eb4363fa43729afc0966 (branch finops-phase4,
+2026-10-08): the manifest checks (validate_manifest, with the fetcher
+entry), and the snapshot validator (validate_snapshot) with the rail
+notice checks. Re-vendor when Light's core_api or contract changes.
 """
 import json
 import math
@@ -30,11 +30,23 @@ NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
 
 MANIFEST_KEYS = {"schema", "name", "title", "version", "core_api", "summary",
                  "collector", "cli", "doctor", "reads", "vendor_reports", "network",
-                 "notices"}
+                 "notices", "fetcher"}
 
 ENTRY_KEYS = {"collector": {"script", "args", "every_s", "budget_s", "timeout_s"},
               "cli": {"script", "args"},
-              "doctor": {"script", "args"}}
+              "doctor": {"script", "args"},
+              "fetcher": {"script", "args", "every_s", "timeout_s", "vendors"}}
+
+FETCH_VENDORS = {
+    "anthropic": ("api.anthropic.com",),
+    "openai": ("api.openai.com",),
+    "xai": ("management-api.x.ai",),
+    "gcp": ("oauth2.googleapis.com", "bigquery.googleapis.com"),
+}
+
+FETCH_EVERY_S = (21600, 3600, 7 * 86400)      # default, least, most
+
+FETCH_TIMEOUT_S = (60, 5, 120)
 
 READS = ("claude-projects", "codex-sessions", "gemini-store", "light-feed")
 
@@ -135,7 +147,7 @@ def validate_manifest(obj, root=None):
     out["vendor_reports"] = sorted(set(vrep))
     if "collector" not in obj:
         raise ModuleError("module.json needs a collector")
-    for where in ("collector", "cli", "doctor"):
+    for where in ("collector", "cli", "doctor", "fetcher"):
         if where not in obj:
             continue
         entry = obj[where]
@@ -146,6 +158,20 @@ def validate_manifest(obj, root=None):
             raise ModuleError(f"module.json {where} has unknown keys: {', '.join(extra)}")
         e = {"script": _check_script(root, entry.get("script"), where),
              "args": _check_args(entry.get("args"), where)}
+        if where == "fetcher":
+            vendors = entry.get("vendors")
+            if not isinstance(vendors, list) or not vendors or \
+                    not all(isinstance(v, str) for v in vendors):
+                raise ModuleError("module.json fetcher vendors must be a list of names")
+            bad = [v for v in vendors if v not in FETCH_VENDORS]
+            if bad:
+                raise ModuleError(f"module.json fetcher vendor {bad[0]!r} is not one of: "
+                                  f"{', '.join(sorted(FETCH_VENDORS))}")
+            e["vendors"] = sorted(set(vendors))
+            e["every_s"] = _int_field(entry, "every_s", FETCH_EVERY_S[0], FETCH_EVERY_S[1],
+                                      FETCH_EVERY_S[2], where)
+            e["timeout_s"] = _int_field(entry, "timeout_s", FETCH_TIMEOUT_S[0],
+                                        FETCH_TIMEOUT_S[1], FETCH_TIMEOUT_S[2], where)
         if where == "collector":
             e["every_s"] = _int_field(entry, "every_s", DEFAULT_EVERY_S, MIN_EVERY_S, 86400, where)
             e["timeout_s"] = _int_field(entry, "timeout_s", DEFAULT_TIMEOUT_S, 5,

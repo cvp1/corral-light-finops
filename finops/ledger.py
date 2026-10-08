@@ -64,6 +64,12 @@ CREATE TABLE IF NOT EXISTS source_state (
 CREATE TABLE IF NOT EXISTS logins_seen (
   lane TEXT NOT NULL, fp TEXT NOT NULL, first_seen REAL NOT NULL,
   plan TEXT, tier TEXT, PRIMARY KEY (lane, fp));
+CREATE TABLE IF NOT EXISTS billed_day (
+  account TEXT NOT NULL, day TEXT NOT NULL, currency TEXT NOT NULL,
+  amount TEXT NOT NULL, PRIMARY KEY (account, day, currency));
+CREATE TABLE IF NOT EXISTS billed_fetch (
+  account TEXT PRIMARY KEY, vendor TEXT NOT NULL, org_id TEXT, org_name TEXT,
+  fetched_at TEXT NOT NULL, range_start TEXT, range_end TEXT, notes TEXT);
 CREATE INDEX IF NOT EXISTS claude_req_ts ON claude_req(ts);
 CREATE INDEX IF NOT EXISTS codex_resp_ts ON codex_resp(ts);
 CREATE INDEX IF NOT EXISTS gemini_ts ON gemini_call(ts);

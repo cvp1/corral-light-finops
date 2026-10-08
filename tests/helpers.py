@@ -176,6 +176,7 @@ class Host:
         self.feed = self.mk("feed")
         self.data = self.mk("data")
         self.cfgdir = self.mk("config")
+        self.fetched = self.mk("fetched")
         self.now = ts("2026-10-07T20:00:00Z")
         self.tz = "UTC"
 
@@ -194,7 +195,7 @@ class Host:
                                                    os.path.dirname(self.panes)],
                                "codex-sessions": [os.path.join(self.root, "codex/sessions")],
                                "gemini-store": [self.gemini]},
-                        tz=self.tz, now=kw.get("now", self.now))
+                        tz=self.tz, now=kw.get("now", self.now), fetched=self.fetched)
 
     def write(self, path, lines, mode="w"):
         with open(path, mode, encoding="utf-8") as f:

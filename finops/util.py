@@ -21,8 +21,9 @@ class Env:
     build one directly; the entry points use from_environ()."""
 
     def __init__(self, data, config=None, feed=None, reads=None, sandboxed=True,
-                 tz=None, now=None):
+                 tz=None, now=None, fetched=None):
         self.data = data
+        self.fetched = fetched or None
         self.config = config
         self.feed = feed or None
         self.reads = reads or {}
@@ -45,7 +46,8 @@ class Env:
         return cls(data=data, config=e.get("CORRAL_MODULE_CONFIG") or None,
                    feed=e.get("CORRAL_MODULE_FEED") or None, reads=reads,
                    sandboxed=e.get("CORRAL_MODULE_SANDBOXED", "1") == "1",
-                   tz=e.get("TZ") or None)
+                   tz=e.get("TZ") or None,
+                   fetched=e.get("CORRAL_MODULE_FETCHED") or None)
 
     def now(self):
         return self._now if self._now is not None else time.time()
@@ -112,6 +114,14 @@ def month_start(now_s, tz):
     local = datetime.fromtimestamp(now_s, tz)
     first = datetime(local.year, local.month, 1, tzinfo=tz)
     return first.timestamp()
+
+
+def month_days(now_s, tz):
+    """('YYYY-MM-01', first day of next month) for the month containing now
+    in tz, as date strings for comparing with UTC day keys."""
+    local = datetime.fromtimestamp(now_s, tz)
+    nxt = (local.year + local.month // 12, local.month % 12 + 1)
+    return f"{local.year:04d}-{local.month:02d}-01", f"{nxt[0]:04d}-{nxt[1]:02d}-01"
 
 
 def month_label(now_s, tz):
