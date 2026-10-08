@@ -36,6 +36,29 @@ corral-light finops accounts    # accepted and proposed accounts
 corral-light finops doctor      # parse rates, unpriced models, diagnostics
 ```
 
+### Notices in Light's rail
+
+On a Light that supports module notices, FinOps puts a short card in the
+Needs-you rail when something needs a decision from you:
+
+- a quota window at 75% or more, or that the vendor marks as near its
+  limit (`warn`); at 90%, or when the vendor has cut you off (`bad`);
+- a source whose record format changed, so its figures are frozen until
+  a module update.
+
+The levels are the same as the quota tiles'. A card clears when the
+window resets or the condition goes away, and Light clears it if FinOps
+stops reporting. Cards never block an agent and never pop the rail open
+on a phone. To turn them off, add this line at the top of FinOps's
+`config.toml`:
+
+```
+notices = "off"
+```
+
+This version declares notices in its manifest, which older Lights refuse:
+update Light before you update FinOps.
+
 ## How the figures are made
 
 - **Null is unreported, never zero.** A figure with no source says

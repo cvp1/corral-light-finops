@@ -1,13 +1,15 @@
 """Corral Light's module contract, vendored for this module's tests.
 
 Copied verbatim (whole top-level definitions) from Light's
-modules.py at commit 063b14f3613d553078c13b89a293ab11d946c12a (master,
-2026-10-07): the manifest checks (validate_manifest) and the snapshot
-validator (validate_snapshot). Re-vendor when Light's core_api changes.
+modules.py at commit a8a8ca81576ddb350486c288b0bfad7b6ad283f5 (branch finops-phase3-plan,
+2026-10-08): the manifest checks (validate_manifest) and the snapshot
+validator (validate_snapshot), with the rail notice checks (plan §4.7).
+Re-vendor when Light's core_api or snapshot contract changes.
 """
 import json
 import math
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -27,7 +29,8 @@ CORE_VERBS = frozenset((
 NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
 
 MANIFEST_KEYS = {"schema", "name", "title", "version", "core_api", "summary",
-                 "collector", "cli", "doctor", "reads", "vendor_reports", "network"}
+                 "collector", "cli", "doctor", "reads", "vendor_reports", "network",
+                 "notices"}
 
 ENTRY_KEYS = {"collector": {"script", "args", "every_s", "budget_s", "timeout_s"},
               "cli": {"script", "args"},
@@ -111,6 +114,10 @@ def validate_manifest(obj, root=None):
         raise ModuleError("module.json network must be \"none\": a collector never "
                           "reaches the network")
     out["network"] = "none"
+    # Rail notices (§4.7) are opt-in, and shown at install like the reads.
+    if not isinstance(obj.get("notices", False), bool):
+        raise ModuleError("module.json notices must be true or false")
+    out["notices"] = obj.get("notices", False)
     reads = obj.get("reads", [])
     if not isinstance(reads, list) or not all(isinstance(r, str) for r in reads):
         raise ModuleError("module.json reads must be a list of names")
@@ -245,9 +252,61 @@ def _validate_block(b):
         blk["dropped"] = d
     return blk
 
-def validate_snapshot(raw):
+NOTICE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+
+NOTICE_LEVELS = ("info", "warn", "bad")
+
+NOTICE_TITLE_CAP, NOTICE_TEXT_CAP = 80, 300
+
+MAX_NOTICES = 5                  # kept per snapshot
+
+_LEVEL_RANK = {"bad": 0, "warn": 1, "info": 2}
+
+def _parse_iso(v):
+    """ISO time -> epoch seconds, or None. A time with no zone is UTC."""
+    if not isinstance(v, str) or not v or len(v) > 40:
+        return None
+    try:
+        t = datetime.fromisoformat(v[:-1] + "+00:00" if v.endswith("Z") else v)
+    except ValueError:
+        return None
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=timezone.utc)
+    try:
+        ts = t.timestamp()
+    except (OverflowError, OSError, ValueError):
+        return None
+    return ts if math.isfinite(ts) else None
+
+def _validate_notices(raw):
+    """A snapshot's `notices` (§4.7) -> (kept, dropped count)."""
+    if not isinstance(raw, list):
+        return [], 0
+    seen, out, dropped = set(), [], 0
+    for n in raw[:200]:
+        nid = n.get("id") if isinstance(n, dict) else None
+        title = _text(n.get("title"), NOTICE_TITLE_CAP) if isinstance(n, dict) else ""
+        if not isinstance(nid, str) or not NOTICE_ID_RE.match(nid) or nid in seen \
+                or not title.strip():
+            dropped += 1
+            continue
+        seen.add(nid)
+        exp = _parse_iso(n.get("expires_at"))
+        out.append({"id": nid,
+                    "level": n.get("level") if n.get("level") in NOTICE_LEVELS else "info",
+                    "title": title, "text": _text(n.get("text"), NOTICE_TEXT_CAP),
+                    "expires_at": (datetime.fromtimestamp(exp, timezone.utc)
+                                   .strftime("%Y-%m-%dT%H:%M:%SZ")
+                                   if exp is not None else None)})
+    dropped += max(0, len(raw) - 200)
+    out.sort(key=lambda x: (_LEVEL_RANK[x["level"]], x["id"]))
+    dropped += max(0, len(out) - MAX_NOTICES)
+    return out[:MAX_NOTICES], dropped
+
+def validate_snapshot(raw, notices=False):
     """bytes or str -> (snapshot, None) or (None, error). Every string is
-    text, every enum is mapped, every bound enforced (§4.5)."""
+    text, every enum is mapped, every bound enforced (§4.5). `notices`: the
+    verified manifest opted in (§4.7); otherwise the field is ignored."""
     if isinstance(raw, (bytes, bytearray)):
         if len(raw) > STDOUT_CAP:
             return None, "the snapshot is larger than 1 MiB"
@@ -279,4 +338,8 @@ def validate_snapshot(raw):
                             "note": _text(pr.get("note"), LABEL_CAP)}
     if len(view) > MAX_BLOCKS:
         snap["truncated"] = {"blocks": len(view) - MAX_BLOCKS}
+    if notices:
+        snap["notices"], nd = _validate_notices(obj.get("notices"))
+        if nd:
+            snap["notices_dropped"] = nd
     return snap, None

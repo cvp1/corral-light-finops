@@ -3,4 +3,4 @@
 Stdlib only, Python 3.9+. Run by Light's module runner (collector.py,
 cli.py); never imported by Light.
 """
-VERSION = "0.1.0"
+VERSION = "0.2.0"

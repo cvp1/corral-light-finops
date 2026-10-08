@@ -5,6 +5,7 @@ only `setup` may write), in the TOML subset Light's own reader takes:
 strings, integers, comments and `[[account]]` tables.
 
     timezone = "local"
+    notices = "off"                   # optional: no rail notices (default "on")
 
     [[account]]
     id = "claude-3be27e"
@@ -71,9 +72,10 @@ def match_plan(plans, vendor, vendor_plan, tier=None):
 
 
 class Config:
-    def __init__(self, path, timezone="local", accounts=None, error=None):
+    def __init__(self, path, timezone="local", accounts=None, error=None, notices="on"):
         self.path = path
         self.timezone = timezone
+        self.notices = notices
         self.accounts = accounts or []
         self.error = error
 
@@ -92,7 +94,10 @@ class Config:
             if isinstance(a.get("id"), str) and isinstance(a.get("vendor"), str):
                 accounts.append(a)
         tz = doc.get("timezone", "local")
-        return cls(path, timezone=tz if isinstance(tz, str) else "local", accounts=accounts)
+        # Rail notices (plan §4.7): on unless the operator wrote "off".
+        notices = "off" if doc.get("notices") == "off" else "on"
+        return cls(path, timezone=tz if isinstance(tz, str) else "local", accounts=accounts,
+                   notices=notices)
 
     def by_match(self):
         return {a["match"]: a for a in self.accounts if isinstance(a.get("match"), str)}
@@ -102,6 +107,8 @@ class Config:
                  "# safe to edit by hand (strings, whole numbers, comments only).",
                  "# usd_cents_month is a price you typed; it is never filled in for you.",
                  "", f"timezone = {tomlmini.basic(self.timezone)}"]
+        if self.notices == "off":
+            lines.append('notices = "off"')
         for a in self.accounts:
             lines += ["", "[[account]]"]
             for k in ACCOUNT_KEYS:

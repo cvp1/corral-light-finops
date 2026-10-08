@@ -3,6 +3,9 @@ text, every figure labelled with its kind (plan §4.5, §6.4).
 
 Null is unreported, never zero: a figure with no source says so.
 """
+import hashlib
+import re
+
 from finops import report, util
 from finops.util import usd, usd_cents
 
@@ -46,6 +49,54 @@ def quota_text(w, now, tz):
         elif w["status"] == "allowed_warning" and level == "ok":
             level = "warn"
     return value, "; ".join(note), level
+
+
+_NOTICE_BAD = re.compile(r"[^a-z0-9._-]")
+SOURCES = ("claude", "codex", "grok", "gemini")
+
+
+def notice_id(*parts):
+    """A stable notice id in the core's alphabet (plan §4.7): lowercased,
+    other characters mapped to '-', and past 64 characters the first 55
+    plus a hash of the whole."""
+    whole = _NOTICE_BAD.sub("-", ".".join(str(p) for p in parts).lower())
+    if len(whole) <= 64:
+        return whole
+    return whole[:55] + "-" + hashlib.sha256(whole.encode()).hexdigest()[:8]
+
+
+def notices(quota, ledger, now, tz):
+    """Rail notices: only what the operator can act on, from figures the
+    snapshot already shows, at the same levels as their tiles."""
+    out = []
+    for w in quota:
+        value, note, level = quota_text(w, now, tz)
+        if level not in ("warn", "bad"):
+            continue
+        pct = _pct(w["bp"])
+        if pct:
+            title = f"{w['label']} {pct} used"
+        else:
+            title = f"{w['label']}: " + ("limit reached" if w["status"] == "rejected"
+                                         else "near its limit")
+        exp = w["resets_at"]
+        if exp is None and w["observed_at"] and w.get("length_s"):
+            exp = w["observed_at"] + w["length_s"]
+        n = {"id": notice_id("quota", w["account"], w["window"]), "level": level,
+             "title": title[:80], "text": note[:300]}
+        if exp:
+            n["expires_at"] = util.utc_iso(exp)
+        out.append(n)
+    for src in SOURCES:
+        st = ledger.source_state(src)
+        if st and st["state"] == "format_changed":
+            out.append({"id": notice_id("source", src, "frozen"), "level": "warn",
+                        "title": f"{report.LANE_TITLES[src]} figures frozen",
+                        "text": "its record format changed, so its figures stopped at "
+                                "their last values; a module update brings them back"})
+    rank = {"bad": 0, "warn": 1}
+    out.sort(key=lambda n: (rank[n["level"]], n["id"]))
+    return out
 
 
 def build(env, ledger, feed, cfg, plans, prices, scan=None, now=None):
@@ -181,6 +232,8 @@ def build(env, ledger, feed, cfg, plans, prices, scan=None, now=None):
     view.append({"type": "link", "label": "How these figures are made", "url": DOCS})
 
     snap = {"schema": SCHEMA, "ok": True, "generated_at": gen, "error": None, "view": view}
+    if getattr(cfg, "notices", "on") != "off":
+        snap["notices"] = notices(quota, ledger, now, tz)
     if scan is not None and not scan.complete:
         snap["progress"] = {"phase": "backfill", "done_pct": scan.done_pct(),
                             "note": f"reading history: {scan.pending_files} files to go"}

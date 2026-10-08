@@ -47,9 +47,12 @@ class Contract(HostCase):
             setup(self.h)
             snap, _ = self.h.run()
             raw = json.dumps(snap).encode()
-            v, err = light_contract.validate_snapshot(raw)
+            v, err = light_contract.validate_snapshot(raw, notices=True)
             self.assertIsNone(err)
             self.assertTrue(v["ok"])
+            self.assertNotIn("notices_dropped", v)
+            self.assertEqual([x["id"] for x in v["notices"]],
+                             [x["id"] for x in snap["notices"]])
             self.assertFalse([b for b in v["view"] if "dropped" in b or b["type"] ==
                               "unsupported"])
             for b in snap["view"]:
@@ -64,6 +67,7 @@ class Contract(HostCase):
             m = light_contract.validate_manifest(json.load(f), ROOT)
         self.assertEqual(m["network"], "none")
         self.assertEqual(m["vendor_reports"], ["grok-usage"])
+        self.assertIs(m["notices"], True)
         self.assertLessEqual(m["collector"]["budget_s"], m["collector"]["timeout_s"])
 
     def test_most_used_joins_panes_and_groups(self):
